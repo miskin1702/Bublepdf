@@ -276,6 +276,48 @@ def create_parser():
         help="Disable fallback translation when LLM output matches input text. (default: False)",
     )
     translation_group.add_argument(
+        "--enable-translation-memory",
+        action="store_true",
+        default=False,
+        help="Enable SQLite-backed translation memory and inject similar past translations into prompts.",
+    )
+    translation_group.add_argument(
+        "--translation-memory-db-path",
+        type=str,
+        default=None,
+        help="Path to translation memory SQLite database file. Defaults to BabelDOC cache directory.",
+    )
+    translation_group.add_argument(
+        "--translation-memory-hint-count",
+        type=int,
+        default=3,
+        help="Maximum number of translation memory hints injected into each prompt.",
+    )
+    translation_group.add_argument(
+        "--translation-memory-lookup-rows",
+        type=int,
+        default=2000,
+        help="How many recent memory rows to scan when retrieving hints.",
+    )
+    translation_group.add_argument(
+        "--translation-memory-min-shared-terms",
+        type=int,
+        default=1,
+        help="Minimum number of shared terms required to treat a memory row as relevant.",
+    )
+    translation_group.add_argument(
+        "--translation-memory-max-rows",
+        type=int,
+        default=100000,
+        help="Maximum rows kept in translation memory per engine/language pair.",
+    )
+    translation_group.add_argument(
+        "--translation-memory-cleanup-probability",
+        type=float,
+        default=0.001,
+        help="Probability (0-1) of running memory cleanup on each insert.",
+    )
+    translation_group.add_argument(
         "--glossary-files",
         type=str,
         default=None,
@@ -729,6 +771,13 @@ async def main():
             skip_formula_offset_calculation=args.skip_formula_offset_calculation,
             metadata_extra_data=args.metadata_extra_data,
             term_pool_max_workers=args.term_pool_max_workers,
+            enable_translation_memory=args.enable_translation_memory,
+            translation_memory_db_path=args.translation_memory_db_path,
+            translation_memory_hint_count=args.translation_memory_hint_count,
+            translation_memory_lookup_rows=args.translation_memory_lookup_rows,
+            translation_memory_min_shared_terms=args.translation_memory_min_shared_terms,
+            translation_memory_max_rows=args.translation_memory_max_rows,
+            translation_memory_cleanup_probability=args.translation_memory_cleanup_probability,
         )
 
         def nop(_x):

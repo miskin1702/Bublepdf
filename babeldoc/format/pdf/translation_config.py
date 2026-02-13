@@ -200,6 +200,13 @@ class TranslationConfig:
         metadata_extra_data: str | None = None,
         term_pool_max_workers: int | None = None,
         disable_same_text_fallback: bool = False,
+        enable_translation_memory: bool = False,
+        translation_memory_db_path: str | Path | None = None,
+        translation_memory_hint_count: int = 3,
+        translation_memory_lookup_rows: int = 2000,
+        translation_memory_min_shared_terms: int = 1,
+        translation_memory_max_rows: int = 100000,
+        translation_memory_cleanup_probability: float = 0.001,
     ):
         self.translator = translator
         self.term_extraction_translator = term_extraction_translator or translator
@@ -348,6 +355,17 @@ class TranslationConfig:
         self.skip_formula_offset_calculation = skip_formula_offset_calculation
 
         self.metadata_extra_data = metadata_extra_data
+        self.enable_translation_memory = enable_translation_memory
+        self.translation_memory_db_path = translation_memory_db_path
+        self.translation_memory_hint_count = max(1, translation_memory_hint_count)
+        self.translation_memory_lookup_rows = max(100, translation_memory_lookup_rows)
+        self.translation_memory_min_shared_terms = max(
+            1, translation_memory_min_shared_terms
+        )
+        self.translation_memory_max_rows = max(1000, translation_memory_max_rows)
+        self.translation_memory_cleanup_probability = min(
+            max(translation_memory_cleanup_probability, 0.0), 1.0
+        )
 
         self.term_extraction_token_usage: dict[str, int] = {
             "total_tokens": 0,

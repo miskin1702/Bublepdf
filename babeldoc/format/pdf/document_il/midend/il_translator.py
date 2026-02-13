@@ -41,6 +41,7 @@ from babeldoc.format.pdf.document_il.utils.paragraph_helper import (
 )
 from babeldoc.format.pdf.document_il.utils.style_helper import GRAY80
 from babeldoc.format.pdf.translation_config import TranslationConfig
+from babeldoc.translator.translation_memory import TranslationMemory
 from babeldoc.translator.translator import BaseTranslator
 from babeldoc.utils.priority_thread_pool_executor import PriorityThreadPoolExecutor
 
@@ -63,6 +64,7 @@ PROMPT_TEMPLATE = Template(
 $glossary_block
 
 $context_block
+$translation_memory_block
 
 ## Output
 
@@ -298,6 +300,7 @@ class LLMTranslateTracker:
         self.error_message = ""
         self.placeholder_full_match = False
         self.fallback_to_translate = False
+        self.translation_memory_hints = []
 
     def set_input(self, input_text: str):
         self.input = input_text
@@ -315,6 +318,9 @@ class LLMTranslateTracker:
     def set_fallback_to_translate(self):
         self.fallback_to_translate = True
 
+    def set_translation_memory_hints(self, hints: list[dict] | None):
+        self.translation_memory_hints = hints or []
+
     def to_dict(self):
         return {
             "input": self.input,
@@ -323,6 +329,7 @@ class LLMTranslateTracker:
             "error_message": self.error_message,
             "placeholder_full_match": self.placeholder_full_match,
             "fallback_to_translate": self.fallback_to_translate,
+            "translation_memory_hints": self.translation_memory_hints,
         }
 
 
@@ -364,6 +371,23 @@ class ILTranslator:
         self.use_as_fallback = False
         self.add_content_filter_hint_lock = threading.Lock()
         self.docs = None
+        self.translation_memory = None
+        if self.translation_config.enable_translation_memory:
+            try:
+                self.translation_memory = TranslationMemory(
+                    translate_engine=self.translate_engine.name,
+                    lang_in=self.translation_config.lang_in,
+                    lang_out=self.translation_config.lang_out,
+                    db_path=self.translation_config.translation_memory_db_path,
+                    max_rows=self.translation_config.translation_memory_max_rows,
+                    cleanup_probability=self.translation_config.translation_memory_cleanup_probability,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to initialize translation memory, feature disabled: %s",
+                    e,
+                )
+                self.translation_memory = None
 
         # Pre-compile patterns for placeholder-like tokens that may be hallucinated by LLM.
         # We only consider the same shapes as our own formula & rich-text placeholders.
@@ -1127,12 +1151,63 @@ class ILTranslator:
 
         return "\n".join(glossary_block_lines)
 
+    def get_translation_memory_hints(self, text: str) -> list[dict]:
+        if not self.translation_memory:
+            return []
+        try:
+            return self.translation_memory.get_similar_hints(
+                text,
+                max_candidates=self.translation_config.translation_memory_hint_count,
+                lookup_rows=self.translation_config.translation_memory_lookup_rows,
+                min_shared_terms=self.translation_config.translation_memory_min_shared_terms,
+            )
+        except Exception as e:
+            logger.debug("Failed to read translation memory hints: %s", e)
+            return []
+
+    def _format_translation_memory_block(self, hints: list[dict]) -> str:
+        if not hints:
+            return ""
+
+        lines = [
+            "## Translation Memory",
+            "Use the following past translations as consistency hints when applicable.",
+            "Do not copy blindly if context differs.",
+            "",
+        ]
+        for idx, hint in enumerate(hints, start=1):
+            shared_terms = ", ".join(hint.get("shared_terms", []))
+            lines.append(f"### Memory #{idx}")
+            lines.append(f"Shared terms: {shared_terms}")
+            lines.append(f"Source: {hint.get('source_text', '')}")
+            lines.append(f"Target: {hint.get('translated_text', '')}")
+            lines.append("")
+        return "\n".join(lines)
+
+    def _build_translation_memory_block(
+        self,
+        text: str,
+        hints: list[dict] | None = None,
+    ) -> str:
+        if hints is None:
+            hints = self.get_translation_memory_hints(text)
+        return self._format_translation_memory_block(hints)
+
+    def store_translation_memory(self, source_text: str, translated_text: str) -> None:
+        if not self.translation_memory:
+            return
+        try:
+            self.translation_memory.store(source_text, translated_text)
+        except Exception as e:
+            logger.debug("Failed to store translation memory: %s", e)
+
     def generate_prompt_for_llm(
         self,
         text: str,
         title_paragraph: PdfParagraph | None = None,
         local_title_paragraph: PdfParagraph | None = None,
         translate_input: TranslateInput | None = None,
+        translation_memory_hints: list[dict] | None = None,
     ):
         """Generate LLM prompt using template-based approach.
 
@@ -1150,11 +1225,16 @@ class ILTranslator:
             title_paragraph, local_title_paragraph, translate_input
         )
         glossary_block = self._build_glossary_block(text)
+        translation_memory_block = self._build_translation_memory_block(
+            text,
+            translation_memory_hints,
+        )
 
         return PROMPT_TEMPLATE.substitute(
             role_block=role_block,
             glossary_block=glossary_block,
             context_block=context_block,
+            translation_memory_block=translation_memory_block,
             lang_out=self.translation_config.lang_out,
             text_to_translate=text,
         )
@@ -1235,11 +1315,16 @@ class ILTranslator:
                 llm_translate_tracker = tracker.new_llm_translate_tracker()
                 # Perform translation
                 if self.support_llm_translate:
+                    translation_memory_hints = self.get_translation_memory_hints(text)
                     llm_prompt = self.generate_prompt_for_llm(
                         text,
                         title_paragraph,
                         local_title_paragraph,
                         translate_input,
+                        translation_memory_hints=translation_memory_hints,
+                    )
+                    llm_translate_tracker.set_translation_memory_hints(
+                        translation_memory_hints
                     )
                     llm_translate_tracker.set_input(llm_prompt)
                     translated_text = self.translate_engine.llm_translate(
@@ -1262,6 +1347,7 @@ class ILTranslator:
                 self.post_translate_paragraph(
                     paragraph, tracker, translate_input, translated_text
                 )
+                self.store_translation_memory(text, translated_text)
             except ContentFilterError as e:
                 logger.warning(f"ContentFilterError: {e.message}")
                 self.add_content_filter_hint(page, paragraph)

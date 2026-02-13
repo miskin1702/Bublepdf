@@ -88,6 +88,7 @@ Output:
 $contextual_hints_block
 
 $glossary_tables_block
+$translation_memory_block
 
 ## Here is the input:
 
@@ -693,7 +694,7 @@ class ILTranslatorLLMOnly:
                 item.get("input", "") for item in json_format_input
             )
 
-            final_input = self._build_llm_prompt(
+            final_input, translation_memory_hints = self._build_llm_prompt(
                 json_input_str=json_format_input_str,
                 title_paragraph=title_paragraph,
                 local_title_paragraph=local_title_paragraph,
@@ -701,6 +702,9 @@ class ILTranslatorLLMOnly:
             )
 
             for llm_translate_tracker in llm_translate_trackers:
+                llm_translate_tracker.set_translation_memory_hints(
+                    translation_memory_hints
+                )
                 llm_translate_tracker.set_input(final_input)
             llm_output = self.translate_engine.llm_translate(
                 final_input,
@@ -806,6 +810,10 @@ class ILTranslatorLLMOnly:
                         translate_input,
                         translated_text,
                     )
+                    self.il_translator.store_translation_memory(
+                        input_unicode,
+                        translated_text,
+                    )
                     should_fallback = False
                     if pbar:
                         pbar.advance(1)
@@ -885,7 +893,7 @@ class ILTranslatorLLMOnly:
         title_paragraph: PdfParagraph | None,
         local_title_paragraph: PdfParagraph | None,
         batch_text_for_glossary_matching: str,
-    ) -> str:
+    ) -> tuple[str, list[dict]]:
         """Build LLM prompt using a single template for easier maintenance."""
         # Build role block, honoring custom_system_prompt if provided.
         custom_prompt = getattr(self.translation_config, "custom_system_prompt", None)
@@ -969,14 +977,23 @@ class ILTranslatorLLMOnly:
                 glossary_table_lines.append("")
             glossary_tables_block = "\n".join(glossary_table_lines)
 
-        return PROMPT_TEMPLATE.substitute(
+        translation_memory_hints = self.il_translator.get_translation_memory_hints(
+            batch_text_for_glossary_matching
+        )
+        translation_memory_block = self.il_translator._format_translation_memory_block(
+            translation_memory_hints
+        )
+
+        prompt = PROMPT_TEMPLATE.substitute(
             role_block=role_block,
             glossary_usage_rules_block=glossary_usage_rules_block,
             contextual_hints_block=contextual_hints_block,
             json_input_str=json_input_str,
             glossary_tables_block=glossary_tables_block,
+            translation_memory_block=translation_memory_block,
             lang_out=self.translation_config.lang_out,
         )
+        return prompt, translation_memory_hints
 
     def _clean_json_output(self, llm_output: str) -> str:
         # Clean up JSON output by removing common wrapper tags
