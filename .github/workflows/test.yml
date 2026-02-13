@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
       - name: Cached Assets
         id: cache-assets
-        uses: actions/cache@v4.2.0
+        uses: actions/cache@v5
         with:
           path: ~/.cache/babeldoc
           key: babeldoc-assets-${{ hashFiles('babeldoc/assets/embedding_assets_metadata.py') }}
