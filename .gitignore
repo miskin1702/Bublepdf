@@ -49,3 +49,25 @@ temp.jpg
 AGENTS.md
 .env.cli2api
 .aider*
+
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+!.env*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.ovpn
+*.kubeconfig
+token-store.json
+*.token
+*.secret
+secrets.json
+secrets.yml
+secrets.yaml
+credentials.json
+auth.json
